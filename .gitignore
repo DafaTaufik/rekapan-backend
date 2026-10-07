@@ -1,5 +1,5 @@
 .env
 *.log
-CONTEXT.md
+CONTEXT_BACKEND.md
 docs
 ANDROID_CONTEXT.md
