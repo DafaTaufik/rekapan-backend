@@ -11,7 +11,11 @@ import (
 )
 
 // GetTransactions returns a paginated list of transactions with optional filters.
-// Query params: date (YYYY-MM-DD), branch_id, status, page, limit
+// Query params: date (YYYY-MM-DD), branch_id, status, search, page, limit
+//
+// The `search` param performs:
+//   - Case-insensitive contains match on nama_pelanggan (e.g. "yuli" → "Bu Yuli", "Kak Yuli")
+//   - Exact suffix match on no_transaksi (e.g. "00026" → "TRX/260116/00026")
 func GetTransactions(c *gin.Context) {
 	var transactions []model.Transaction
 
@@ -37,6 +41,21 @@ func GetTransactions(c *gin.Context) {
 		query = query.Where("status = ?", status)
 	}
 
+	// Search by nama_pelanggan (contains) OR no_transaksi suffix (exact)
+	// branch_id wajib diisi saat search aktif (supaya search terbatas pada satu branch)
+	search := c.Query("search")
+	if search != "" {
+		if c.Query("branch_id") == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "branch_id is required when using search"})
+			return
+		}
+		query = query.Where(
+			"LOWER(nama_pelanggan) LIKE LOWER(?) OR no_transaksi LIKE ?",
+			"%"+search+"%",
+			"%/"+search,
+		)
+	}
+
 	// Pagination
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -45,7 +64,7 @@ func GetTransactions(c *gin.Context) {
 	}
 	offset := (page - 1) * limit
 
-	// Count total records
+	// Count total records (with all filters applied)
 	var total int64
 	query.Count(&total)
 
@@ -62,39 +81,6 @@ func GetTransactions(c *gin.Context) {
 		"page":  page,
 		"limit": limit,
 	})
-}
-
-// GetTransactionByTrxID finds a transaction by the trailing sequence number of no_transaksi.
-// Example: trx_id=01444 will match no_transaksi = 'TRX/260116/01444'
-func GetTransactionByTrxID(c *gin.Context) {
-	trxID := c.Param("trx_id")
-
-	var transaction model.Transaction
-	result := config.DB.Where("no_transaksi LIKE ?", "%/"+trxID).First(&transaction)
-	if result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Transaction not found"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"data": transaction})
-}
-
-func GetTransactionByBranchID(c *gin.Context) {
-	branchIDStr := c.Param("branch_id")
-	branchID, err := strconv.Atoi(branchIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid branch ID"})
-		return
-	}
-
-	var transactions []model.Transaction
-	result := config.DB.Where("branch_id = ?", branchID).Order("DATE(tanggal_masuk) DESC, tanggal_masuk ASC").Find(&transactions)
-	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch transactions", "details": result.Error.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"data": transactions})
 }
 
 // TogglePaymentStatus toggles status_pembayaran between 'lunas' and 'belum lunas'
